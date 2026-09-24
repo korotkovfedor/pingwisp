@@ -10,10 +10,10 @@ Requires Go **1.xy.z+**.
 
 ## Usage
 
-POST   /monitors
-GET    /monitors
-GET    /monitors/{id}
-DELETE /monitors/{id}
+POST   /targets
+GET    /targets
+GET    /targets/{id}
+DELETE /targets/{id}
 
 ## Behavior
 
