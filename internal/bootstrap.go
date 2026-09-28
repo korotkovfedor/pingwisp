@@ -1,18 +1,26 @@
 package internal
 
 import (
+	"context"
 	"log"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/korotkovfedor/pingwisp/internal/handlers"
+	"github.com/korotkovfedor/pingwisp/internal/poller"
 )
 
 func Bootstrap() {
+	ctx := context.Background()
+
+	poller := poller.New()
+	go poller.Run(ctx)
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /ping", handlers.HandlePing)
+	mux.Handle("POST /targets", handlers.NewCreateTarget(poller))
 
 	server := &http.Server{
 		Addr:              ":8080",

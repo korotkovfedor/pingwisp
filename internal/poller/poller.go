@@ -1,4 +1,4 @@
-package internal
+package poller
 
 import (
 	"context"
@@ -10,36 +10,32 @@ import (
 	"slices"
 	"sync"
 	"time"
-)
 
-type TargetID uint64
+	"github.com/korotkovfedor/pingwisp/internal/models"
+)
 
 type Poller struct {
 	mu      sync.Mutex
 	wakeup  chan struct{}
-	targets map[TargetID]Target
+	targets map[models.TargetID]models.Target
 	// TODO: Replace with min-heap
 	scheduleq []pollTask
 	client    *http.Client
-}
 
-type Target struct {
-	ID       TargetID
-	URL      string
-	Interval time.Duration
+	nextID models.TargetID
 }
 
 type pollTask struct {
 	executeAt time.Time
-	targetID  TargetID
+	targetID  models.TargetID
 }
 
-func NewPoller() *Poller {
+func New() *Poller {
 	client := &http.Client{}
 
 	return &Poller{
 		wakeup:  make(chan struct{}, 1),
-		targets: make(map[TargetID]Target),
+		targets: make(map[models.TargetID]models.Target),
 		client:  client,
 	}
 }
@@ -110,16 +106,19 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-func (p *Poller) AddTarget(target Target) error {
+func (p *Poller) CreateTarget(url string, interval time.Duration) models.Target {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	_, ok := p.targets[target.ID]
-	if ok {
-		return errors.New("target already exists")
+	id := p.nextID
+	p.nextID++
+	target := models.Target{
+		ID:       id,
+		URL:      url,
+		Interval: interval,
 	}
 
-	p.targets[target.ID] = target
+	p.targets[id] = target
 	p.scheduleq = append(p.scheduleq, pollTask{
 		targetID:  target.ID,
 		executeAt: time.Now().Add(target.Interval),
@@ -128,10 +127,10 @@ func (p *Poller) AddTarget(target Target) error {
 	p.sortScheduled()
 	p.notify()
 
-	return nil
+	return target
 }
 
-func (p *Poller) DeleteTarget(id TargetID) error {
+func (p *Poller) DeleteTarget(id models.TargetID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -153,20 +152,20 @@ func (p *Poller) DeleteTarget(id TargetID) error {
 	return nil
 }
 
-func (p *Poller) GetTarget(id TargetID) (Target, error) {
+func (p *Poller) GetTarget(id models.TargetID) (models.Target, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	target, ok := p.targets[id]
 	if !ok {
-		return Target{}, errors.New("target does not exist")
+		return models.Target{}, errors.New("target does not exist")
 	}
 
 	return target, nil
 
 }
 
-func (p *Poller) GetTargets() []Target {
+func (p *Poller) GetTargets() []models.Target {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -189,7 +188,7 @@ func (p *Poller) notify() {
 	}
 }
 
-func (p *Poller) executePoll(ctx context.Context, target Target) {
+func (p *Poller) executePoll(ctx context.Context, target models.Target) {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 	logger := slog.With(

@@ -7,11 +7,6 @@ func HandlePing(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("pong"))
 }
 
-// POST   /monitors
-// GET    /monitors
-// GET    /monitors/{id}
-// DELETE /monitors/{id}
-
 func HandleGetTargets(w http.ResponseWriter, r *http.Request) {
 	writeDefaultHeaders(w)
 }
