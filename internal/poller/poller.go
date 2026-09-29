@@ -20,6 +20,7 @@ type Poller struct {
 	targets map[models.TargetID]models.Target
 	// TODO: Replace with min-heap
 	scheduleq []pollTask
+	active    map[models.TargetID]context.CancelFunc
 	client    *http.Client
 
 	nextID models.TargetID
@@ -36,6 +37,7 @@ func New() *Poller {
 	return &Poller{
 		wakeup:  make(chan struct{}, 1),
 		targets: make(map[models.TargetID]models.Target),
+		active:  make(map[models.TargetID]context.CancelFunc),
 		client:  client,
 	}
 }
@@ -77,16 +79,24 @@ func (p *Poller) Run(ctx context.Context) {
 				slog.Warn("missing target after schedule")
 				continue
 			}
+
+			ctx, cancel := context.WithCancel(ctx)
+			p.active[task.targetID] = cancel
+
 			p.mu.Unlock()
 
 			go func() {
+				defer cancel()
+
 				p.executePoll(ctx, target)
-				if ctx.Err() != nil {
-					return
-				}
 
 				p.mu.Lock()
 				defer p.mu.Unlock()
+				defer delete(p.active, target.ID)
+
+				if ctx.Err() != nil {
+					return
+				}
 
 				_, ok := p.targets[target.ID]
 				if !ok {
@@ -147,22 +157,23 @@ func (p *Poller) DeleteTarget(id models.TargetID) error {
 		},
 	)
 
+	cancel, ok := p.active[id]
+	if ok {
+		cancel()
+		delete(p.active, id)
+	}
+
 	p.notify()
 
 	return nil
 }
 
-func (p *Poller) GetTarget(id models.TargetID) (models.Target, error) {
+func (p *Poller) GetTarget(id models.TargetID) (models.Target, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	target, ok := p.targets[id]
-	if !ok {
-		return models.Target{}, errors.New("target does not exist")
-	}
-
-	return target, nil
-
+	return target, ok
 }
 
 func (p *Poller) GetTargets() []models.Target {

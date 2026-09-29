@@ -19,8 +19,10 @@ func Bootstrap() {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /ping", handlers.HandlePing)
 	mux.Handle("POST /targets", handlers.NewCreateTarget(poller))
+	mux.Handle("GET /targets", handlers.NewGetTargets(poller))
+	mux.Handle("GET /targets/{id}", handlers.NewGetTarget(poller))
+	mux.Handle("DELETE /targets/{id}", handlers.NewDeleteTarget(poller))
 
 	server := &http.Server{
 		Addr:              ":8080",

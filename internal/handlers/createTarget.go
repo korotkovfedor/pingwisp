@@ -13,14 +13,18 @@ type CreateTargetHandler struct {
 	targetCreator TargetCreator
 }
 
+type TargetCreator interface {
+	CreateTarget(url string, interval time.Duration) models.Target
+}
+
 func NewCreateTarget(targetCreator TargetCreator) *CreateTargetHandler {
 	return &CreateTargetHandler{
 		targetCreator: targetCreator,
 	}
 }
 
-func (a *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	writeDefaultHeaders(w)
+func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
 
 	var CreateTarget CreateTargetRequest
 	err := json.NewDecoder(r.Body).Decode(&CreateTarget)
@@ -35,7 +39,7 @@ func (a *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	target := a.targetCreator.CreateTarget(
+	target := h.targetCreator.CreateTarget(
 		CreateTarget.URL,
 		time.Second*time.Duration(CreateTarget.IntervalSeconds),
 	)
@@ -52,10 +56,6 @@ func (a *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 	w.WriteHeader(http.StatusCreated)
 	w.Write(jsonData)
-}
-
-type TargetCreator interface {
-	CreateTarget(url string, interval time.Duration) models.Target
 }
 
 type CreateTargetRequest struct {
