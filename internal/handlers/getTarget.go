@@ -7,19 +7,19 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
-type TargetGetter interface {
+type targetGetter interface {
 	GetTarget(id models.TargetID) (models.TargetState, bool)
 }
 
-type GetTargetHandler struct {
-	targetGetter TargetGetter
+type getTargetHandler struct {
+	targetGetter targetGetter
 }
 
-func NewGetTarget(targetGetter TargetGetter) *GetTargetHandler {
-	return &GetTargetHandler{targetGetter: targetGetter}
+func newGetTarget(targetGetter targetGetter) *getTargetHandler {
+	return &getTargetHandler{targetGetter: targetGetter}
 }
 
-func (h *GetTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *getTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, apiError{

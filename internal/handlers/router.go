@@ -2,22 +2,22 @@ package handlers
 
 import "net/http"
 
-type TargetManager interface {
-	TargetCreator
-	TargetGetter
-	TargetLister
-	TargetDeleter
+type targetManager interface {
+	targetCreator
+	targetGetter
+	targetLister
+	targetDeleter
 }
 
-func NewRouter(targets TargetManager) *http.ServeMux {
+func NewRouter(targets targetManager) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.Handle("POST /targets", NewCreateTarget(targets))
-	mux.Handle("GET /targets", NewGetTargets(targets))
+	mux.Handle("POST /targets", newCreateTarget(targets))
+	mux.Handle("GET /targets", newGetTargets(targets))
 	mux.HandleFunc("/targets", methodNotAllowed("GET, HEAD, POST"))
 
-	mux.Handle("GET /targets/{id}", NewGetTarget(targets))
-	mux.Handle("DELETE /targets/{id}", NewDeleteTarget(targets))
+	mux.Handle("GET /targets/{id}", newGetTarget(targets))
+	mux.Handle("DELETE /targets/{id}", newDeleteTarget(targets))
 	mux.HandleFunc("/targets/{id}", methodNotAllowed("DELETE, GET, HEAD"))
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

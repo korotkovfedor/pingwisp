@@ -101,9 +101,9 @@ func TestTargetResponseJSON(t *testing.T) {
 func TestTargetHandlersShareRepresentation(t *testing.T) {
 	p := poller.New()
 	mux := http.NewServeMux()
-	mux.Handle("POST /targets", NewCreateTarget(p))
-	mux.Handle("GET /targets/{id}", NewGetTarget(p))
-	mux.Handle("GET /targets", NewGetTargets(p))
+	mux.Handle("POST /targets", newCreateTarget(p))
+	mux.Handle("GET /targets/{id}", newGetTarget(p))
+	mux.Handle("GET /targets", newGetTargets(p))
 
 	request := httptest.NewRequest(http.MethodPost, "/targets", strings.NewReader(`{"url":"https://example.com/health","interval_seconds":30}`))
 	request.Header.Set("Content-Type", "application/json")

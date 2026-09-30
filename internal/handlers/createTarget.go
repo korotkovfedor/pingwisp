@@ -19,21 +19,21 @@ const (
 	maxIntervalSeconds  = 86400
 )
 
-type CreateTargetHandler struct {
-	targetCreator TargetCreator
+type createTargetHandler struct {
+	targetCreator targetCreator
 }
 
-type TargetCreator interface {
+type targetCreator interface {
 	CreateTarget(url string, interval time.Duration) models.TargetState
 }
 
-func NewCreateTarget(targetCreator TargetCreator) *CreateTargetHandler {
-	return &CreateTargetHandler{
+func newCreateTarget(targetCreator targetCreator) *createTargetHandler {
+	return &createTargetHandler{
 		targetCreator: targetCreator,
 	}
 }
 
-func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *createTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	defer r.Body.Close()
 
@@ -53,7 +53,7 @@ func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var request CreateTargetRequest
+	var request createTargetRequest
 	err = json.NewDecoder(bytes.NewReader(body)).Decode(&request)
 	if err != nil {
 		if typeError, ok := errors.AsType[*json.UnmarshalTypeError](err); ok && typeError.Field != "" {
@@ -85,12 +85,12 @@ func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, newTargetResponse(state))
 }
 
-type CreateTargetRequest struct {
+type createTargetRequest struct {
 	URL             string `json:"url"`
 	IntervalSeconds int    `json:"interval_seconds"`
 }
 
-func (r *CreateTargetRequest) validate() *apiError {
+func (r *createTargetRequest) validate() *apiError {
 	if r.URL == "" {
 		return &apiError{
 			Code:    codeInvalidRequest,

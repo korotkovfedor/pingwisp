@@ -7,19 +7,19 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
-type TargetDeleter interface {
+type targetDeleter interface {
 	DeleteTarget(id models.TargetID) bool
 }
 
-type DeleteTargetHandler struct {
-	targetDeleter TargetDeleter
+type deleteTargetHandler struct {
+	targetDeleter targetDeleter
 }
 
-func NewDeleteTarget(targetDeleter TargetDeleter) *DeleteTargetHandler {
-	return &DeleteTargetHandler{targetDeleter: targetDeleter}
+func newDeleteTarget(targetDeleter targetDeleter) *deleteTargetHandler {
+	return &deleteTargetHandler{targetDeleter: targetDeleter}
 }
 
-func (h *DeleteTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *deleteTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, apiError{

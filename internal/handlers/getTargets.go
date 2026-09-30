@@ -8,19 +8,19 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
-type TargetLister interface {
+type targetLister interface {
 	GetTargets() []models.TargetState
 }
 
-type GetTargetsHandler struct {
-	targetLister TargetLister
+type getTargetsHandler struct {
+	targetLister targetLister
 }
 
-func NewGetTargets(targetLister TargetLister) *GetTargetsHandler {
-	return &GetTargetsHandler{targetLister: targetLister}
+func newGetTargets(targetLister targetLister) *getTargetsHandler {
+	return &getTargetsHandler{targetLister: targetLister}
 }
 
-func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *getTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	targets := h.targetLister.GetTargets()
 	slices.SortFunc(targets, func(a, b models.TargetState) int {
 		return cmp.Compare(a.Settings.ID, b.Settings.ID)
