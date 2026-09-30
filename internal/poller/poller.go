@@ -128,7 +128,7 @@ func (p *Poller) Run(ctx context.Context) {
 	}
 }
 
-func (p *Poller) CreateTarget(url string, interval time.Duration) models.Target {
+func (p *Poller) CreateTarget(url string, interval time.Duration) models.TargetState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -139,12 +139,13 @@ func (p *Poller) CreateTarget(url string, interval time.Duration) models.Target 
 		URL:      url,
 		Interval: interval,
 	}
-	nextCheckAt := time.Now().Add(target.Interval)
+	nextCheckAt := time.Now()
 
-	p.states[id] = models.TargetState{
+	state := models.TargetState{
 		Settings:    target,
 		NextCheckAt: &nextCheckAt,
 	}
+	p.states[id] = state
 	p.scheduleq = append(p.scheduleq, pollTask{
 		targetID:  target.ID,
 		executeAt: nextCheckAt,
@@ -153,7 +154,7 @@ func (p *Poller) CreateTarget(url string, interval time.Duration) models.Target 
 	p.sortScheduled()
 	p.notify()
 
-	return target
+	return state
 }
 
 func (p *Poller) DeleteTarget(id models.TargetID) error {

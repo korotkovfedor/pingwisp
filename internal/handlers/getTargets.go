@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"slices"
-	"time"
 
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
@@ -23,24 +22,18 @@ func NewGetTargets(targetLister TargetLister) *GetTargetsHandler {
 }
 
 func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "application/json")
-
-	response := getTargetsResponse{
-		Targets: []targetItem{},
-	}
+	w.Header().Set("Content-Type", "application/json")
 
 	targets := h.targetLister.GetTargets()
 	slices.SortFunc(targets, func(a, b models.TargetState) int {
 		return cmp.Compare(a.Settings.ID, b.Settings.ID)
 	})
 
-	for _, target := range targets {
-		item := targetItem{
-			ID:              target.Settings.ID,
-			URL:             target.Settings.URL,
-			IntervalSeconds: int(target.Settings.Interval / time.Second),
-		}
-		response.Targets = append(response.Targets, item)
+	response := getTargetsResponse{
+		Targets: make([]targetResponse, 0, len(targets)),
+	}
+	for _, state := range targets {
+		response.Targets = append(response.Targets, newTargetResponse(state))
 	}
 
 	jsonData, err := json.Marshal(response)
@@ -53,11 +46,5 @@ func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type getTargetsResponse struct {
-	Targets []targetItem `json:"targets"`
-}
-
-type targetItem struct {
-	ID              models.TargetID `json:"id"`
-	URL             string          `json:"url"`
-	IntervalSeconds int             `json:"interval_seconds"`
+	Targets []targetResponse `json:"targets"`
 }
