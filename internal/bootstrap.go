@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/korotkovfedor/pingwisp/internal/checker"
 	"github.com/korotkovfedor/pingwisp/internal/handlers"
 	"github.com/korotkovfedor/pingwisp/internal/poller"
 )
@@ -14,7 +15,8 @@ import (
 func Bootstrap() {
 	ctx := context.Background()
 
-	poller := poller.New()
+	httpChecker := checker.NewHTTP(&http.Client{})
+	poller := poller.New(httpChecker)
 	go poller.Run(ctx)
 
 	server := &http.Server{

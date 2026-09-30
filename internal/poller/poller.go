@@ -2,11 +2,8 @@ package poller
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log/slog"
 	"maps"
-	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -14,14 +11,19 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
+// Checker performs one target check. Check may be called concurrently and must
+// honor context cancellation.
+type Checker interface {
+	Check(ctx context.Context, target models.Target) models.CheckResult
+}
+
 type Poller struct {
-	mu     sync.Mutex
-	wakeup chan struct{}
-	states map[models.TargetID]models.TargetState
-	// TODO: Replace with min-heap
+	mu        sync.Mutex
+	wakeup    chan struct{}
+	states    map[models.TargetID]models.TargetState
 	scheduleq []pollTask
 	active    map[models.TargetID]context.CancelFunc
-	client    *http.Client
+	checker   Checker
 
 	nextID models.TargetID
 }
@@ -31,101 +33,118 @@ type pollTask struct {
 	targetID  models.TargetID
 }
 
-func New() *Poller {
-	client := &http.Client{}
-
+func New(checker Checker) *Poller {
 	return &Poller{
-		wakeup: make(chan struct{}, 1),
-		states: make(map[models.TargetID]models.TargetState),
-		active: make(map[models.TargetID]context.CancelFunc),
-		client: client,
-		nextID: 1,
+		wakeup:  make(chan struct{}, 1),
+		states:  make(map[models.TargetID]models.TargetState),
+		active:  make(map[models.TargetID]context.CancelFunc),
+		checker: checker,
+		nextID:  1,
 	}
 }
 
 func (p *Poller) Run(ctx context.Context) {
 	for {
-		p.mu.Lock()
-		var timer <-chan time.Time
-		if len(p.scheduleq) != 0 {
-			timerExecuteAt := p.scheduleq[0].executeAt
-			timer = time.After(time.Until(timerExecuteAt))
-		}
-		p.mu.Unlock()
-
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.wakeup:
 			continue
-		case <-timer:
-			p.mu.Lock()
-			if len(p.scheduleq) == 0 {
-				p.mu.Unlock()
-				continue
-			}
-
-			task := p.scheduleq[0]
-
-			if time.Now().Before(task.executeAt) {
-				p.mu.Unlock()
-				continue
-			}
-
-			clear(p.scheduleq[:1])
-			p.scheduleq = p.scheduleq[1:]
-			state, ok := p.states[task.targetID]
-			if !ok {
-				p.mu.Unlock()
-				slog.Warn("missing state after schedule")
-				continue
-			}
-
-			ctx, cancel := context.WithCancel(ctx)
-			p.active[task.targetID] = cancel
-			p.states[state.Settings.ID] = models.TargetState{
-				Settings:    state.Settings,
-				LastCheck:   state.LastCheck,
-				NextCheckAt: nil,
-			}
-
-			p.mu.Unlock()
-
-			go func() {
-				defer cancel()
-
-				result := p.executePoll(ctx, state.Settings)
-
-				p.mu.Lock()
-				defer p.mu.Unlock()
-				defer delete(p.active, state.Settings.ID)
-
-				if ctx.Err() != nil {
-					return
-				}
-
-				_, ok := p.states[state.Settings.ID]
-				if !ok {
-					return
-				}
-
-				nextCheckAt := result.CompletedAt.Add(state.Settings.Interval)
-
-				p.states[state.Settings.ID] = models.TargetState{
-					Settings:    state.Settings,
-					LastCheck:   &result,
-					NextCheckAt: &nextCheckAt,
-				}
-				p.scheduleq = append(p.scheduleq, pollTask{
-					targetID:  state.Settings.ID,
-					executeAt: nextCheckAt,
-				})
-
-				p.sortScheduled()
-				p.notify()
-			}()
+		case <-p.nextCheckTimer():
+			p.startDueCheck(ctx)
 		}
 	}
+}
+
+func (p *Poller) nextCheckTimer() <-chan time.Time {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.scheduleq) == 0 {
+		return nil
+	}
+
+	return time.After(time.Until(p.scheduleq[0].executeAt))
+}
+
+func (p *Poller) startDueCheck(ctx context.Context) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if ctx.Err() != nil || len(p.scheduleq) == 0 {
+		return
+	}
+
+	task := p.scheduleq[0]
+	if time.Now().Before(task.executeAt) {
+		return
+	}
+
+	clear(p.scheduleq[:1])
+	p.scheduleq = p.scheduleq[1:]
+	state, ok := p.states[task.targetID]
+	if !ok {
+		slog.Warn("missing state after schedule", "target_id", task.targetID)
+		return
+	}
+
+	checkCtx, cancel := context.WithCancel(ctx)
+	p.active[task.targetID] = cancel
+	state.NextCheckAt = nil
+	p.states[task.targetID] = state
+
+	go p.runCheck(checkCtx, state.Settings, cancel)
+}
+
+func (p *Poller) runCheck(ctx context.Context, target models.Target, cancel context.CancelFunc) {
+	defer cancel()
+
+	result := p.checker.Check(ctx, target)
+	if !p.finishCheck(ctx, target, result) {
+		return
+	}
+
+	logger := slog.With(
+		"target_id", target.ID,
+		"url", target.URL,
+		"status", result.Status,
+		"latency_ms", result.Latency.Milliseconds(),
+	)
+	if result.StatusCode != nil {
+		logger = logger.With("status_code", *result.StatusCode)
+	}
+	if result.Error != nil {
+		logger.Error("poll failed", "error", result.Error)
+	} else {
+		logger.Info("poll completed")
+	}
+}
+
+func (p *Poller) finishCheck(ctx context.Context, target models.Target, result models.CheckResult) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	defer delete(p.active, target.ID)
+
+	if ctx.Err() != nil {
+		return false
+	}
+	if _, ok := p.states[target.ID]; !ok {
+		return false
+	}
+
+	nextCheckAt := result.CompletedAt.Add(target.Interval)
+	p.states[target.ID] = models.TargetState{
+		Settings:    target,
+		LastCheck:   &result,
+		NextCheckAt: &nextCheckAt,
+	}
+	p.scheduleq = append(p.scheduleq, pollTask{
+		targetID:  target.ID,
+		executeAt: nextCheckAt,
+	})
+	p.sortScheduled()
+	p.notify()
+	return true
 }
 
 func (p *Poller) CreateTarget(url string, interval time.Duration) models.TargetState {
@@ -213,93 +232,5 @@ func (p *Poller) notify() {
 	select {
 	case p.wakeup <- struct{}{}:
 	default:
-	}
-}
-
-func (p *Poller) executePoll(ctx context.Context, target models.Target) models.CheckResult {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	logger := slog.With(
-		"url", target.URL,
-	)
-
-	req, err := http.NewRequestWithContext(ctx, "GET", target.URL, nil)
-	if err != nil {
-		logger.Error(
-			"poll failed",
-			"error", err,
-		)
-		return models.CheckResult{
-			Status:      models.StatusDown,
-			CompletedAt: time.Now(),
-			Error:       err,
-		}
-	}
-
-	start := time.Now()
-	resp, err := p.client.Do(req)
-	if err != nil {
-		logger.Error(
-			"poll failed",
-			"error", err,
-		)
-		return models.CheckResult{
-			Status:      models.StatusDown,
-			CompletedAt: time.Now(),
-			Error:       err,
-			Latency:     time.Since(start),
-		}
-	}
-	defer resp.Body.Close()
-
-	const maxReadBytes = 1 * 1024 * 1024 // 1 MB
-	limited := io.LimitReader(resp.Body, maxReadBytes+1)
-
-	n, err := io.Copy(io.Discard, limited)
-	latency := time.Since(start)
-	if err != nil {
-		logger.Error(
-			"response read failed",
-			"error", err,
-		)
-		return models.CheckResult{
-			Status:      models.StatusDown,
-			StatusCode:  &resp.StatusCode,
-			CompletedAt: time.Now(),
-			Latency:     latency,
-			Error:       err,
-		}
-	}
-
-	if n > maxReadBytes {
-		logger.Error(
-			"response limit exceeded",
-		)
-		return models.CheckResult{
-			Status:      models.StatusDown,
-			StatusCode:  &resp.StatusCode,
-			CompletedAt: time.Now(),
-			Latency:     latency,
-			Error:       errors.New("response limit exceeded"),
-		}
-	}
-
-	logger.Info(
-		"poll completed",
-		"status_code", resp.StatusCode,
-	)
-
-	var status string
-	if 200 <= resp.StatusCode && resp.StatusCode < 300 {
-		status = models.StatusUp
-	} else {
-		status = models.StatusDown
-	}
-
-	return models.CheckResult{
-		Status:      status,
-		StatusCode:  &resp.StatusCode,
-		CompletedAt: time.Now(),
-		Latency:     latency,
 	}
 }

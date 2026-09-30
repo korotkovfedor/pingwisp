@@ -2,31 +2,29 @@ package poller
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+type checkFunc func(context.Context, models.Target) models.CheckResult
 
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
+func (f checkFunc) Check(ctx context.Context, target models.Target) models.CheckResult {
+	return f(ctx, target)
 }
 
 func TestCreateTargetStartsImmediatelyAndPreservesCreationSnapshot(t *testing.T) {
-	p := New()
 	started := make(chan struct{})
-	p.client = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	p := New(checkFunc(func(ctx context.Context, target models.Target) models.CheckResult {
 		close(started)
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader("ok")),
-			Header:     make(http.Header),
-			Request:    r,
-		}, nil
-	})}
+		statusCode := 200
+		return models.CheckResult{
+			Status:      models.StatusUp,
+			StatusCode:  &statusCode,
+			CompletedAt: time.Now(),
+		}
+	}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})

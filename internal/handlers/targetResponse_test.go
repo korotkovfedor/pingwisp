@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/korotkovfedor/pingwisp/internal/checker"
 	"github.com/korotkovfedor/pingwisp/internal/models"
 	"github.com/korotkovfedor/pingwisp/internal/poller"
 )
@@ -99,7 +100,7 @@ func TestTargetResponseJSON(t *testing.T) {
 }
 
 func TestTargetHandlersShareRepresentation(t *testing.T) {
-	p := poller.New()
+	p := poller.New(checker.NewHTTP(nil))
 	mux := http.NewServeMux()
 	mux.Handle("POST /targets", newCreateTarget(p))
 	mux.Handle("GET /targets/{id}", newGetTarget(p))
