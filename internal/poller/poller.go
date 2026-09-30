@@ -39,6 +39,7 @@ func New() *Poller {
 		states: make(map[models.TargetID]models.TargetState),
 		active: make(map[models.TargetID]context.CancelFunc),
 		client: client,
+		nextID: 1,
 	}
 }
 
@@ -215,7 +216,7 @@ func (p *Poller) notify() {
 }
 
 func (p *Poller) executePoll(ctx context.Context, target models.Target) models.CheckResult {
-	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	logger := slog.With(
 		"url", target.URL,
