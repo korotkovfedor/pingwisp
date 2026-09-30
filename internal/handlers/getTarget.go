@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -21,25 +20,24 @@ func NewGetTarget(targetGetter TargetGetter) *GetTargetHandler {
 }
 
 func (h *GetTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, apiError{
+			Code:    codeInvalidID,
+			Message: "id must be a decimal unsigned 64-bit integer",
+			Field:   "id",
+		})
 		return
 	}
 
 	state, ok := h.targetGetter.GetTarget(models.TargetID(id))
 	if !ok {
-		http.Error(w, "target not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, apiError{
+			Code:    codeTargetNotFound,
+			Message: "target not found",
+		})
 		return
 	}
 
-	jsonData, err := json.Marshal(newTargetResponse(state))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Write(jsonData)
+	writeJSON(w, http.StatusOK, newTargetResponse(state))
 }

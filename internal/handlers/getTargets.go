@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"cmp"
-	"encoding/json"
 	"net/http"
 	"slices"
 
@@ -22,8 +21,6 @@ func NewGetTargets(targetLister TargetLister) *GetTargetsHandler {
 }
 
 func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
 	targets := h.targetLister.GetTargets()
 	slices.SortFunc(targets, func(a, b models.TargetState) int {
 		return cmp.Compare(a.Settings.ID, b.Settings.ID)
@@ -36,13 +33,7 @@ func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		response.Targets = append(response.Targets, newTargetResponse(state))
 	}
 
-	jsonData, err := json.Marshal(response)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Write(jsonData)
+	writeJSON(w, http.StatusOK, response)
 }
 
 type getTargetsResponse struct {

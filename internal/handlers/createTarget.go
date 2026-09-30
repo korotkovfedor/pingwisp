@@ -1,13 +1,22 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/korotkovfedor/pingwisp/internal/models"
+)
+
+const (
+	maxRequestBodyBytes = 16 * 1024
+	minIntervalSeconds  = 1
+	maxIntervalSeconds  = 86400
 )
 
 type CreateTargetHandler struct {
@@ -25,18 +34,45 @@ func NewCreateTarget(targetCreator TargetCreator) *CreateTargetHandler {
 }
 
 func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	var request CreateTargetRequest
-	err := json.NewDecoder(r.Body).Decode(&request)
-	if err != nil {
-		http.Error(w, "Malformed JSON body", http.StatusBadRequest)
-		return
-	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	defer r.Body.Close()
 
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeError(w, http.StatusRequestEntityTooLarge, apiError{
+				Code:    codeRequestTooLarge,
+				Message: "request body must not exceed 16 KiB",
+			})
+		} else {
+			writeError(w, http.StatusBadRequest, apiError{
+				Code:    codeInvalidJSON,
+				Message: "request body could not be read",
+			})
+		}
+		return
+	}
+
+	var request CreateTargetRequest
+	err = json.NewDecoder(bytes.NewReader(body)).Decode(&request)
+	if err != nil {
+		if typeError, ok := errors.AsType[*json.UnmarshalTypeError](err); ok && typeError.Field != "" {
+			writeError(w, http.StatusBadRequest, apiError{
+				Code:    codeInvalidRequest,
+				Message: "invalid value for " + typeError.Field,
+				Field:   typeError.Field,
+			})
+		} else {
+			writeError(w, http.StatusBadRequest, apiError{
+				Code:    codeInvalidJSON,
+				Message: "malformed JSON body",
+			})
+		}
+		return
+	}
+
 	if err := request.validate(); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, *err)
 		return
 	}
 
@@ -45,15 +81,8 @@ func (h *CreateTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 		time.Second*time.Duration(request.IntervalSeconds),
 	)
 
-	jsonData, err := json.Marshal(newTargetResponse(state))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Location", "/targets/"+strconv.FormatUint(uint64(state.Settings.ID), 10))
-	w.WriteHeader(http.StatusCreated)
-	w.Write(jsonData)
+	writeJSON(w, http.StatusCreated, newTargetResponse(state))
 }
 
 type CreateTargetRequest struct {
@@ -61,13 +90,21 @@ type CreateTargetRequest struct {
 	IntervalSeconds int    `json:"interval_seconds"`
 }
 
-func (r *CreateTargetRequest) validate() error {
+func (r *CreateTargetRequest) validate() *apiError {
 	if r.URL == "" {
-		return errors.New("url is required")
+		return &apiError{
+			Code:    codeInvalidRequest,
+			Message: "url is required",
+			Field:   "url",
+		}
 	}
 
-	if r.IntervalSeconds <= 0 {
-		return errors.New("interval_seconds must be greater than 0")
+	if r.IntervalSeconds < minIntervalSeconds || r.IntervalSeconds > maxIntervalSeconds {
+		return &apiError{
+			Code:    codeInvalidRequest,
+			Message: fmt.Sprintf("interval_seconds must be between %d and %d", minIntervalSeconds, maxIntervalSeconds),
+			Field:   "interval_seconds",
+		}
 	}
 
 	return nil

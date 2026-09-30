@@ -138,8 +138,8 @@ func TestTargetHandlersShareRepresentation(t *testing.T) {
 		t.Fatalf("GET status = %d; body = %s; want %s", got.Code, got.Body, created.Body)
 	}
 
-	if err := p.DeleteTarget(1); err != nil {
-		t.Fatal(err)
+	if !p.DeleteTarget(1) {
+		t.Fatal("created target was not deleted")
 	}
 	listed := httptest.NewRecorder()
 	mux.ServeHTTP(listed, httptest.NewRequest(http.MethodGet, "/targets", nil))

@@ -157,13 +157,13 @@ func (p *Poller) CreateTarget(url string, interval time.Duration) models.TargetS
 	return state
 }
 
-func (p *Poller) DeleteTarget(id models.TargetID) error {
+func (p *Poller) DeleteTarget(id models.TargetID) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	_, ok := p.states[id]
 	if !ok {
-		return errors.New("target does not exist")
+		return false
 	}
 
 	delete(p.states, id)
@@ -182,7 +182,7 @@ func (p *Poller) DeleteTarget(id models.TargetID) error {
 
 	p.notify()
 
-	return nil
+	return true
 }
 
 func (p *Poller) GetTarget(id models.TargetID) (models.TargetState, bool) {

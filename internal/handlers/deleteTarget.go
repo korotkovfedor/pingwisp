@@ -8,7 +8,7 @@ import (
 )
 
 type TargetDeleter interface {
-	DeleteTarget(id models.TargetID) error
+	DeleteTarget(id models.TargetID) bool
 }
 
 type DeleteTargetHandler struct {
@@ -20,17 +20,21 @@ func NewDeleteTarget(targetDeleter TargetDeleter) *DeleteTargetHandler {
 }
 
 func (h *DeleteTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Add("Content-Type", "application/json")
-
 	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, apiError{
+			Code:    codeInvalidID,
+			Message: "id must be a decimal unsigned 64-bit integer",
+			Field:   "id",
+		})
 		return
 	}
 
-	err = h.targetDeleter.DeleteTarget(models.TargetID(id))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if !h.targetDeleter.DeleteTarget(models.TargetID(id)) {
+		writeError(w, http.StatusNotFound, apiError{
+			Code:    codeTargetNotFound,
+			Message: "target not found",
+		})
 		return
 	}
 
