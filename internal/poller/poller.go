@@ -15,9 +15,9 @@ import (
 )
 
 type Poller struct {
-	mu      sync.Mutex
-	wakeup  chan struct{}
-	targets map[models.TargetID]models.Target
+	mu     sync.Mutex
+	wakeup chan struct{}
+	states map[models.TargetID]models.TargetState
 	// TODO: Replace with min-heap
 	scheduleq []pollTask
 	active    map[models.TargetID]context.CancelFunc
@@ -35,10 +35,10 @@ func New() *Poller {
 	client := &http.Client{}
 
 	return &Poller{
-		wakeup:  make(chan struct{}, 1),
-		targets: make(map[models.TargetID]models.Target),
-		active:  make(map[models.TargetID]context.CancelFunc),
-		client:  client,
+		wakeup: make(chan struct{}, 1),
+		states: make(map[models.TargetID]models.TargetState),
+		active: make(map[models.TargetID]context.CancelFunc),
+		client: client,
 	}
 }
 
@@ -73,44 +73,55 @@ func (p *Poller) Run(ctx context.Context) {
 
 			clear(p.scheduleq[:1])
 			p.scheduleq = p.scheduleq[1:]
-			target, ok := p.targets[task.targetID]
+			state, ok := p.states[task.targetID]
 			if !ok {
 				p.mu.Unlock()
-				slog.Warn("missing target after schedule")
+				slog.Warn("missing state after schedule")
 				continue
 			}
 
 			ctx, cancel := context.WithCancel(ctx)
 			p.active[task.targetID] = cancel
+			p.states[state.Settings.ID] = models.TargetState{
+				Settings:    state.Settings,
+				LastCheck:   state.LastCheck,
+				NextCheckAt: nil,
+			}
 
 			p.mu.Unlock()
 
 			go func() {
 				defer cancel()
 
-				p.executePoll(ctx, target)
+				result := p.executePoll(ctx, state.Settings)
 
 				p.mu.Lock()
 				defer p.mu.Unlock()
-				defer delete(p.active, target.ID)
+				defer delete(p.active, state.Settings.ID)
 
 				if ctx.Err() != nil {
 					return
 				}
 
-				_, ok := p.targets[target.ID]
+				_, ok := p.states[state.Settings.ID]
 				if !ok {
 					return
 				}
 
+				nextCheckAt := result.CompletedAt.Add(state.Settings.Interval)
+
+				p.states[state.Settings.ID] = models.TargetState{
+					Settings:    state.Settings,
+					LastCheck:   &result,
+					NextCheckAt: &nextCheckAt,
+				}
 				p.scheduleq = append(p.scheduleq, pollTask{
-					targetID:  target.ID,
-					executeAt: time.Now().Add(target.Interval),
+					targetID:  state.Settings.ID,
+					executeAt: nextCheckAt,
 				})
 
 				p.sortScheduled()
 				p.notify()
-
 			}()
 		}
 	}
@@ -127,11 +138,15 @@ func (p *Poller) CreateTarget(url string, interval time.Duration) models.Target 
 		URL:      url,
 		Interval: interval,
 	}
+	nextCheckAt := time.Now().Add(target.Interval)
 
-	p.targets[id] = target
+	p.states[id] = models.TargetState{
+		Settings:    target,
+		NextCheckAt: &nextCheckAt,
+	}
 	p.scheduleq = append(p.scheduleq, pollTask{
 		targetID:  target.ID,
-		executeAt: time.Now().Add(target.Interval),
+		executeAt: nextCheckAt,
 	})
 
 	p.sortScheduled()
@@ -144,12 +159,12 @@ func (p *Poller) DeleteTarget(id models.TargetID) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	_, ok := p.targets[id]
+	_, ok := p.states[id]
 	if !ok {
 		return errors.New("target does not exist")
 	}
 
-	delete(p.targets, id)
+	delete(p.states, id)
 	p.scheduleq = slices.DeleteFunc(
 		p.scheduleq,
 		func(task pollTask) bool {
@@ -168,19 +183,19 @@ func (p *Poller) DeleteTarget(id models.TargetID) error {
 	return nil
 }
 
-func (p *Poller) GetTarget(id models.TargetID) (models.Target, bool) {
+func (p *Poller) GetTarget(id models.TargetID) (models.TargetState, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	target, ok := p.targets[id]
+	target, ok := p.states[id]
 	return target, ok
 }
 
-func (p *Poller) GetTargets() []models.Target {
+func (p *Poller) GetTargets() []models.TargetState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return slices.Collect(maps.Values(p.targets))
+	return slices.Collect(maps.Values(p.states))
 }
 
 func (p *Poller) sortScheduled() {
@@ -199,7 +214,7 @@ func (p *Poller) notify() {
 	}
 }
 
-func (p *Poller) executePoll(ctx context.Context, target models.Target) {
+func (p *Poller) executePoll(ctx context.Context, target models.Target) models.CheckResult {
 	ctx, cancel := context.WithTimeout(ctx, time.Second*60)
 	defer cancel()
 	logger := slog.With(
@@ -212,16 +227,26 @@ func (p *Poller) executePoll(ctx context.Context, target models.Target) {
 			"poll failed",
 			"error", err,
 		)
-		return
+		return models.CheckResult{
+			Status:      models.StatusDown,
+			CompletedAt: time.Now(),
+			Error:       err,
+		}
 	}
 
+	start := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
 		logger.Error(
 			"poll failed",
 			"error", err,
 		)
-		return
+		return models.CheckResult{
+			Status:      models.StatusDown,
+			CompletedAt: time.Now(),
+			Error:       err,
+			Latency:     time.Since(start),
+		}
 	}
 	defer resp.Body.Close()
 
@@ -229,23 +254,50 @@ func (p *Poller) executePoll(ctx context.Context, target models.Target) {
 	limited := io.LimitReader(resp.Body, maxReadBytes+1)
 
 	n, err := io.Copy(io.Discard, limited)
+	latency := time.Since(start)
 	if err != nil {
 		logger.Error(
 			"response read failed",
 			"error", err,
 		)
-		return
+		return models.CheckResult{
+			Status:      models.StatusDown,
+			StatusCode:  &resp.StatusCode,
+			CompletedAt: time.Now(),
+			Latency:     latency,
+			Error:       err,
+		}
 	}
 
 	if n > maxReadBytes {
 		logger.Error(
 			"response limit exceeded",
 		)
-		return
+		return models.CheckResult{
+			Status:      models.StatusDown,
+			StatusCode:  &resp.StatusCode,
+			CompletedAt: time.Now(),
+			Latency:     latency,
+			Error:       errors.New("response limit exceeded"),
+		}
 	}
 
 	logger.Info(
 		"poll completed",
 		"status_code", resp.StatusCode,
 	)
+
+	var status string
+	if 200 <= resp.StatusCode && resp.StatusCode < 300 {
+		status = models.StatusUp
+	} else {
+		status = models.StatusDown
+	}
+
+	return models.CheckResult{
+		Status:      status,
+		StatusCode:  &resp.StatusCode,
+		CompletedAt: time.Now(),
+		Latency:     latency,
+	}
 }

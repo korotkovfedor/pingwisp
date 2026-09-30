@@ -10,7 +10,7 @@ import (
 )
 
 type TargetGetter interface {
-	GetTarget(id models.TargetID) (models.Target, bool)
+	GetTarget(id models.TargetID) (models.TargetState, bool)
 }
 
 type GetTargetHandler struct {
@@ -37,9 +37,9 @@ func (h *GetTargetHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := getTargetResponse{
-		ID:              target.ID,
-		URL:             target.URL,
-		IntervalSeconds: int(target.Interval / time.Second),
+		ID:              target.Settings.ID,
+		URL:             target.Settings.URL,
+		IntervalSeconds: int(target.Settings.Interval / time.Second),
 	}
 
 	jsonData, err := json.Marshal(response)

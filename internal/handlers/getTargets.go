@@ -11,7 +11,7 @@ import (
 )
 
 type TargetLister interface {
-	GetTargets() []models.Target
+	GetTargets() []models.TargetState
 }
 
 type GetTargetsHandler struct {
@@ -30,15 +30,15 @@ func (h *GetTargetsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targets := h.targetLister.GetTargets()
-	slices.SortFunc(targets, func(a, b models.Target) int {
-		return cmp.Compare(a.ID, b.ID)
+	slices.SortFunc(targets, func(a, b models.TargetState) int {
+		return cmp.Compare(a.Settings.ID, b.Settings.ID)
 	})
 
 	for _, target := range targets {
 		item := targetItem{
-			ID:              target.ID,
-			URL:             target.URL,
-			IntervalSeconds: int(target.Interval / time.Second),
+			ID:              target.Settings.ID,
+			URL:             target.Settings.URL,
+			IntervalSeconds: int(target.Settings.Interval / time.Second),
 		}
 		response.Targets = append(response.Targets, item)
 	}
