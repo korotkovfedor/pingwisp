@@ -1,25 +1,28 @@
-# Контракт HTTP API
+# HTTP API contract
 
-Согласованный контракт первой версии, зафиксирован 2026-09-30.
-Гарантии DELETE уточнены 2026-10-01.
-Описывает целевое поведение API; часть этого поведения ещё не реализована.
+This document describes the current implementation.
 
-## Общие правила
+The default base URL is `http://127.0.0.1:8080`; the address can be changed with
+`--listen`.
 
-- Все запросы с телом используют `Content-Type: application/json`.
-- Все ответы с JSON-телом используют `Content-Type: application/json`.
-- Имена полей — `snake_case`.
-- ID — JSON-число и беззнаковое 64-битное целое. Первый ID — `1`.
-- Длительности в API передаются в целых секундах или миллисекундах;
-  единица указана в имени поля. Строкового поля `interval` нет.
-- Время передаётся в RFC 3339, в UTC (`Z`).
-- Nullable-поля присутствуют в ответе и содержат `null`, когда значения нет.
-- Перевод строки после JSON необязателен.
+## Conventions
 
-## Представление target
+- Send JSON request bodies with `Content-Type: application/json`.
+- Responses with a JSON body use `Content-Type: application/json`.
+- Field names use `snake_case`.
+- Target IDs are unsigned 64-bit integers, represented as JSON numbers.
+  IDs start at `1` in each new server process.
+- Durations are integers; field names specify seconds or milliseconds.
+- Timestamps use RFC 3339 in UTC (`Z`).
+- Nullable response fields are always present and contain `null` when unset.
+- No query parameters are defined; query parameters are currently ignored.
+- `HEAD` is supported for the GET routes, with the same status and headers but
+  no response body.
 
-POST и GET одной цели возвращают одинаковое представление. Элементы списка
-GET /targets используют это же представление.
+## Target representation
+
+POST and GET responses use the same target representation. List responses
+contain objects with these same fields.
 
 ```json
 {
@@ -27,39 +30,42 @@ GET /targets используют это же представление.
   "url": "https://example.com/health",
   "interval_seconds": 30,
   "status": "up",
-  "last_checked_at": "2026-09-29T02:10:32Z",
+  "last_checked_at": "2026-10-04T02:10:32Z",
   "status_code": 200,
   "latency_ms": 143,
   "error": null,
-  "next_check_at": "2026-09-29T02:11:02Z"
+  "next_check_at": "2026-10-04T02:11:02Z"
 }
 ```
 
-| Поле | Тип | Значение |
+| Field | Type | Meaning |
 | --- | --- | --- |
-| `id` | integer | ID цели |
-| `url` | string | URL, принятый при создании |
-| `interval_seconds` | integer | Пауза между завершением проверки и следующим запуском |
-| `status` | string | `pending`, `up` или `down` |
-| `last_checked_at` | string / null | Время завершения последней проверки |
-| `status_code` | integer / null | HTTP-код последней проверки, если ответ был получен |
-| `latency_ms` | integer / null | Длительность последней проверки в миллисекундах |
-| `error` | string / null | Причина ошибки выполнения последней проверки |
-| `next_check_at` | string / null | Назначенное время следующего запуска; `null` во время активной проверки |
+| `id` | integer | Target ID. |
+| `url` | string | URL submitted when the target was created. |
+| `interval_seconds` | integer | Delay between completion of a check and the next check. |
+| `status` | string | `pending`, `up`, or `down`. |
+| `last_checked_at` | string / null | Completion time of the latest check. |
+| `status_code` | integer / null | Latest HTTP response code, if a response was received. |
+| `latency_ms` | integer / null | Duration of the latest check in milliseconds. |
+| `error` | string / null | Latest check error, if any. |
+| `next_check_at` | string / null | Scheduled time of the next check; `null` while a check is running. |
 
-`status`, `last_checked_at`, `status_code`, `latency_ms` и `error` относятся
-к одной последней завершённой проверке. Во время новой проверки они сохраняются.
-Настройки, последний результат и расписание читаются как согласованный снимок.
-
-До завершения первой проверки `status` равен `pending`, а поля последнего
-результата — `null`. `next_check_at` отражает расписание отдельно от результата.
+Before the first check completes, `status` is `pending` and all latest-result
+fields are `null`. During later checks, the previous result remains visible.
+Settings, the latest result, and the schedule are returned as a consistent
+snapshot for each target.
 
 ## POST /targets
 
-Создаёт независимую цель мониторинга. Повторный запрос с тем же URL создаёт
-новую цель с новым ID; дедупликации по URL нет.
+Creates an independent monitoring target. Submitting the same URL again creates
+another target with a new ID.
 
-### Запрос
+### Request
+
+```http
+POST /targets
+Content-Type: application/json
+```
 
 ```json
 {
@@ -68,16 +74,18 @@ GET /targets используют это же представление.
 }
 ```
 
-- Оба поля обязательны.
-- `url` — абсолютный URL с протоколом `http` или `https` и непустым host.
-  Userinfo и fragment не принимаются. Правила разрешённых сетевых адресов
-  определяются политикой исходящих запросов сервера.
-- `interval_seconds` — положительное целое число в допустимом диапазоне.
-- Тело содержит ровно один JSON-объект. Неизвестные поля отклоняются.
+| Field | Type | Required | Current constraints |
+| --- | --- | --- | --- |
+| `url` | string | Yes | Must be nonempty. Use an absolute HTTP or HTTPS URL; URL structure is not yet validated at creation. |
+| `interval_seconds` | integer | Yes | Between `1` and `86400`, inclusive. |
 
-### Ответ
+The entire request body, including whitespace and any trailing content, must
+not exceed **16 KiB (16384 bytes)**. Missing or `null` required fields fail
+validation. Invalid field types are rejected.
 
-`201 Created`, заголовок `Location: /targets/1` и снимок созданной цели:
+### Responses
+
+`201 Created` includes `Location: /targets/1` and the initial target snapshot:
 
 ```json
 {
@@ -89,19 +97,57 @@ GET /targets используют это же представление.
   "status_code": null,
   "latency_ms": null,
   "error": null,
-  "next_check_at": "2026-09-29T02:10:00Z"
+  "next_check_at": "2026-10-04T02:10:00Z"
 }
 ```
 
-Первая проверка назначается сразу. Ответ POST отражает момент создания,
-поэтому возвращает `pending`; следующий GET уже может увидеть результат.
+The first check is scheduled immediately. POST always returns the creation
+snapshot with `pending`; a subsequent GET may already show a completed check.
 
-Ошибки: `400`, `413`, `415`, `500` — по общему формату ниже.
+| HTTP status | Response | Meaning |
+| --- | --- | --- |
+| `201 Created` | Target object | Target created. |
+| `400 Bad Request` | `invalid_json` error | Empty, unreadable, malformed, or incompatible JSON body. |
+| `400 Bad Request` | `invalid_request` error | Missing or invalid required field. |
+| `413 Request Entity Too Large` | `request_too_large` error | Request body exceeds 16 KiB. |
+| `500 Internal Server Error` | `internal_error` error | Response could not be encoded. |
 
 ## GET /targets
 
-Не принимает тело или параметры запроса. Возвращает `200 OK` и список текущих
-состояний всех целей, отсортированный по `id` по возрастанию.
+Returns all current targets, ordered by ascending ID.
+
+### Request
+
+```http
+GET /targets
+```
+
+No request body is needed. There is no pagination or filtering.
+
+### Responses
+
+`200 OK` returns a `targets` array. Each element uses the
+[target representation](#target-representation):
+
+```json
+{
+  "targets": [
+    {
+      "id": 1,
+      "url": "https://example.com/health",
+      "interval_seconds": 30,
+      "status": "up",
+      "last_checked_at": "2026-10-04T02:10:32Z",
+      "status_code": 200,
+      "latency_ms": 143,
+      "error": null,
+      "next_check_at": "2026-10-04T02:11:02Z"
+    }
+  ]
+}
+```
+
+An empty list is `[]`, not `null`:
 
 ```json
 {
@@ -109,58 +155,91 @@ GET /targets используют это же представление.
 }
 ```
 
-Для непустого списка каждый элемент `targets` имеет полное представление
-target. Пустой список — `[]`, а не `null`. Пагинации в этой версии нет.
-
-Ошибка: `500` при неожиданном сбое.
+| HTTP status | Response | Meaning |
+| --- | --- | --- |
+| `200 OK` | Object with a `targets` array | Current targets, including an empty list. |
+| `500 Internal Server Error` | `internal_error` error | Response could not be encoded. |
 
 ## GET /targets/{id}
 
-Не принимает тело. `id` — десятичное беззнаковое 64-битное целое.
+Returns the current state of one target.
 
-- `200 OK` — текущее представление target.
-- `400 Bad Request` — ID нельзя разобрать или он выходит за диапазон.
-- `404 Not Found` — такого ID нет, включая удалённую цель.
-- `500 Internal Server Error` — неожиданный сбой.
+### Request
 
-Состояние `down` является успешным результатом чтения: GET возвращает `200`,
-даже если проверяемый endpoint недоступен.
+```http
+GET /targets/1
+```
+
+No request body is needed. `id` must contain decimal digits and fit in an
+unsigned 64-bit integer (`0` through `18446744073709551615`). ID `0` is valid
+syntax but has no corresponding target in normal use.
+
+### Responses
+
+`200 OK` returns a target object, as shown under
+[Target representation](#target-representation). For example, a check that
+received HTTP `503` produces this target snapshot:
+
+```json
+{
+  "id": 1,
+  "url": "https://example.com/health",
+  "interval_seconds": 30,
+  "status": "down",
+  "last_checked_at": "2026-10-04T02:10:32Z",
+  "status_code": 503,
+  "latency_ms": 82,
+  "error": null,
+  "next_check_at": "2026-10-04T02:11:02Z"
+}
+```
+
+| HTTP status | Response | Meaning |
+| --- | --- | --- |
+| `200 OK` | Target object | Target found. |
+| `400 Bad Request` | `invalid_id` error | ID has invalid syntax or is outside the unsigned 64-bit range. |
+| `404 Not Found` | `target_not_found` error | Target does not exist or has been deleted. |
+| `500 Internal Server Error` | `internal_error` error | Response could not be encoded. |
+
+A target with `status: "down"` still produces `200 OK`: the API request succeeded
+even though the monitored endpoint failed its latest check.
 
 ## DELETE /targets/{id}
 
-Не принимает тело. Правила разбора `id` совпадают с GET одной цели.
+Removes a target and cancels its scheduled and active checks.
 
-- `204 No Content` — цель удалена, её запланированные проверки убраны,
-  активной локальной проверке отправлен сигнал отмены. Тела ответа нет.
-- `400 Bad Request` — некорректный ID.
-- `404 Not Found` — цель отсутствует. Повторное удаление тоже возвращает `404`.
-- `500 Internal Server Error` — неожиданный сбой.
+### Request
 
-После успешного удаления цель недоступна через GET, новые проверки не
-назначаются, а результат активной проверки отбрасывается. Цель не появляется
-повторно из завершившейся горутины. Ответ DELETE не ожидает завершения
-этой горутины и освобождения её ресурсов. Отмена исходящего запроса не
-гарантирует остановку работы, которую уже начал удалённый сервер.
+```http
+DELETE /targets/1
+```
 
-## Поведение проверок
+No request body is needed. ID rules match
+[GET /targets/{id}](#get-targetsid).
 
-- Для опроса используется HTTP GET.
-- Проверки одной цели не выполняются одновременно.
-- HTTP-код `2xx` при успешном завершении запроса означает `up`.
-- HTTP-код вне `2xx` означает `down`; сам по себе он не заполняет `error`.
-- Ошибка сети, таймаут или ошибка чтения ответа означает `down` и заполняет `error`.
-- Если HTTP-ответ не был получен, `status_code` равен `null`. Если ошибка
-  возникла после получения заголовков, полученный код сохраняется.
-- `latency_ms` измеряет всю проверку: подключение, HTTP-запрос и чтение ответа.
-- Перенаправления следуются в пределах политики исходящих запросов;
-  в результате сохраняется итоговый HTTP-код.
-- Следующая проверка назначается на время завершения текущей плюс интервал.
-  Назначенное время не гарантирует точный запуск при перегрузке.
-- Удаление или остановка приложения не создаёт новый результат `down`.
+### Responses
 
-## Ошибки API
+```http
+HTTP/1.1 204 No Content
+```
 
-Все ошибки ручек имеют JSON-оболочку:
+The successful response has no body and no `Content-Type` header.
+
+| HTTP status | Response | Meaning |
+| --- | --- | --- |
+| `204 No Content` | Empty body | Target removed. |
+| `400 Bad Request` | `invalid_id` error | Invalid or out-of-range ID. |
+| `404 Not Found` | `target_not_found` error | Target does not exist; repeated deletion also returns this response. |
+
+After successful deletion, GET cannot find the target and no further checks
+are scheduled. An active local check receives a cancellation signal and its
+result is discarded. DELETE does not wait for that check to finish or release
+its resources. Cancellation cannot guarantee that a remote server stops work
+it has already started.
+
+## Error responses
+
+Documented API errors use this JSON envelope:
 
 ```json
 {
@@ -172,39 +251,46 @@ target. Пустой список — `[]`, а не `null`. Пагинации �
 }
 ```
 
-`field` присутствует только для ошибки конкретного поля. `code` предназначен
-для программной обработки; `message` — для человека, его текст может меняться.
-При `500` клиент получает общее сообщение, а подробности записываются в лог.
+`field` is included only for errors associated with a particular field.
+`code` is intended for programmatic handling. `message` is human-readable and
+may change. Internal encoding errors return a generic message and log details.
 
-| HTTP-код | `error.code` | Причина |
+| HTTP status | `error.code` | Meaning |
 | --- | --- | --- |
-| 400 | `invalid_json` | Некорректный JSON или лишнее содержимое после объекта |
-| 400 | `invalid_request` | Недопустимое или неизвестное поле запроса |
-| 400 | `invalid_id` | Некорректный ID в пути |
-| 404 | `target_not_found` | Цель не найдена |
-| 404 | `route_not_found` | Путь не соответствует ручке API |
-| 405 | `method_not_allowed` | Неподдерживаемый метод; ответ содержит `Allow` |
-| 413 | `request_too_large` | Превышен размер тела |
-| 415 | `unsupported_media_type` | Тело передано не как JSON |
-| 500 | `internal_error` | Неожиданный внутренний сбой |
+| `400` | `invalid_json` | Request body cannot be read or decoded as the expected JSON object. |
+| `400` | `invalid_request` | Required field is missing or has an invalid value or type. |
+| `400` | `invalid_id` | Invalid target ID in the path. |
+| `404` | `target_not_found` | Target does not exist. |
+| `404` | `route_not_found` | Unknown API route. |
+| `405` | `method_not_allowed` | Unsupported method for a known route. |
+| `413` | `request_too_large` | POST body exceeds 16 KiB. |
+| `500` | `internal_error` | Response could not be encoded. |
 
-Поле `error` внутри представления target описывает последнюю проверку.
-Оболочка ошибки API описывает сбой самой операции POST/GET/DELETE.
+`405` responses include `Allow: GET, HEAD, POST` for `/targets`, or
+`Allow: DELETE, GET, HEAD` for `/targets/{id}`.
 
-## Лимиты и ограничения первой версии
+The `error` field in a target object describes a monitoring check. The API error
+envelope describes a failed API operation.
 
-- Интервал: от 1 до 86400 секунд включительно.
-- Таймаут одной проверки: 3 секунды, одинаковый для всех целей.
-- Максимальный размер тела запроса POST: 16 KiB.
-- Максимальный размер читаемого ответа endpoint: 1 MiB; превышение означает
-  `down` с заполненным `error`.
+## Check behavior and limits
 
-Хранилище первой версии — в памяти одного процесса. Перезапуск удаляет цели,
-результаты и расписание; ID могут использоваться повторно после перезапуска.
-Стабильность данных между перезапусками потребует отдельного хранилища.
+- Checks use HTTP GET. Checks for one target never overlap.
+- Each check has a **3-second timeout**, including reading the response body.
+- At most **1 MiB (1048576 bytes)** of response body is accepted. Exceeding this
+  limit marks the target `down` and sets `error`.
+- A completed request with a `2xx` status is `up`. Other status codes are `down`
+  without an error message unless the request or body read also fails.
+- Network errors, timeouts, and response read errors produce `down` with an
+  error message. If no HTTP response was received, `status_code` is `null`.
+  If headers were received before an error, the response code is preserved.
+- Latency includes connection establishment, the request, and reading the body.
+- Redirects are followed. The final response code is recorded; excessive
+  redirects fail the check.
+- The next check is scheduled at completion time plus `interval_seconds`.
+  Scheduling does not guarantee an exact start time under load.
+- Deletion and application shutdown do not create a new `down` result.
 
-## Отложенные проверки POST
-
-Проверки `Content-Type`, структуры URL, неизвестных полей и дополнительного
-содержимого после первого JSON-объекта остаются целевыми требованиями;
-их реализация отложена до следующего этапа.
+Storage is in memory in a single process. Restarting the server removes all
+targets, results, and schedules; IDs may be reused after restart. No target-count
+limit or global check-concurrency limit is currently enforced. The API has no
+authentication, and target network addresses are not restricted.
