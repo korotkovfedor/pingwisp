@@ -15,7 +15,11 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/poller"
 )
 
-func Bootstrap() error {
+func Bootstrap(listenAddr string) error {
+	if listenAddr == "" {
+		return errors.New("listen address must not be empty")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -23,7 +27,7 @@ func Bootstrap() error {
 	poller := poller.New(httpChecker)
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              listenAddr,
 		Handler:           handlers.NewRouter(poller),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
@@ -51,7 +55,7 @@ func Bootstrap() error {
 		shutdownDone <- shutdownErr
 	}()
 
-	slog.Info("Serving at http://localhost:8080")
+	slog.Info("Starting HTTP server", "addr", server.Addr)
 	serveErr := server.ListenAndServe()
 	stop()
 	shutdownErr := <-shutdownDone
