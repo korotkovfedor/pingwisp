@@ -11,14 +11,13 @@ import (
 	"github.com/korotkovfedor/pingwisp/internal/models"
 )
 
-// Checker performs one target check. Check may be called concurrently and must
-// honor context cancellation.
 type Checker interface {
 	Check(ctx context.Context, target models.Target) models.CheckResult
 }
 
 type Poller struct {
 	mu        sync.Mutex
+	wg        sync.WaitGroup
 	wakeup    chan struct{}
 	states    map[models.TargetID]models.TargetState
 	scheduleq []pollTask
@@ -47,6 +46,7 @@ func (p *Poller) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			p.wg.Wait()
 			return
 		case <-p.wakeup:
 			continue
@@ -93,7 +93,9 @@ func (p *Poller) startDueCheck(ctx context.Context) {
 	state.NextCheckAt = nil
 	p.states[task.targetID] = state
 
-	go p.runCheck(checkCtx, state.Settings, cancel)
+	p.wg.Go(func() {
+		p.runCheck(checkCtx, state.Settings, cancel)
+	})
 }
 
 func (p *Poller) runCheck(ctx context.Context, target models.Target, cancel context.CancelFunc) {
@@ -110,6 +112,7 @@ func (p *Poller) runCheck(ctx context.Context, target models.Target, cancel cont
 		"status", result.Status,
 		"latency_ms", result.Latency.Milliseconds(),
 	)
+
 	if result.StatusCode != nil {
 		logger = logger.With("status_code", *result.StatusCode)
 	}
